@@ -528,7 +528,7 @@ def finalizar_pedido():
 def mostrar_historico():
     tela = tk.Toplevel(janela)
     tela.title("Histórico de Pedidos")
-    tela.geometry("1100x450")
+    tela.geometry("1100x450") #tamanho da tela 850 por 450 
     tela.configure(bg="white")
 
     tabela_pedidos = ttk.Treeview(
