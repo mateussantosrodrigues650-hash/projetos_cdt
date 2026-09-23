@@ -2,300 +2,547 @@ import os
 import json
 import random
 import sqlite3
-import urllib.request
-import tkinter as tk
-from tkinter import ttk, messagebox
-from datetime import datetime
+import customtkinter as ctk
+from datetime import datetime, timedelta
+from tkinter import messagebox, ttk
 
-# Importação da Pillow (PIL) para exibir PNGs no Tkinter
-try:
-    from PIL import Image, ImageTk
-    HAS_PIL = True
-except ImportError:
-    HAS_PIL = False
-
+# Importação de biblioteca opcional para dados fictícios
 try:
     from faker import Faker
     fake = Faker("pt_BR")
 except ImportError:
     fake = None
 
-
 # =====================================================
-# CONFIGURAÇÕES DA LOJA REAL
+# CONFIGURAÇÃO DE APARÊNCIA E TEMA
 # =====================================================
+ctk.set_appearance_mode("Dark")
+ctk.set_default_color_theme("green")
 
-NOME_LOJA = "Nação dos Mantos - Automação"
+NOME_LOJA = "⚽ NAÇÃO DOS MANTOS ⚽"
+INSTAGRAM_LOJA = "📸 @nacaodosmantosoficial"
 BANCO = "loja_camisas.db"
 ARQUIVO_JSON = "configuracao.json"
-PASTA_ESCUDOS = "escudos"
 PRECO_PERSONALIZACAO = 20.00
-TAXA_ENTREGA = 10.00  # Taxa de entrega fixa R$ 10,00
 
-# Mapeamento com links diretos para escudos PNG transparentes
+def carregar_configuracao():
+    if os.path.exists(ARQUIVO_JSON):
+        try:
+            with open(ARQUIVO_JSON, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except Exception:
+            pass
+    return {"preco_personalizacao": PRECO_PERSONALIZACAO, "loja": NOME_LOJA}
+
+def salvar_configuracao():
+    dados = {
+        "loja": NOME_LOJA,
+        "preco_personalizacao": PRECO_PERSONALIZACAO
+    }
+    with open(ARQUIVO_JSON, "w", encoding="utf-8") as f:
+        json.dump(dados, f, indent=4, ensure_ascii=False)
+
+salvar_configuracao()
+
+# Dicionário base de dados para carga inicial do catálogo
 times_dados = {
-    "Athletico-PR": {"preco": 149.90, "sigla": "CAP", "cor": "#c62828", "arquivo": "athletico.png", "url": "https://upload.wikimedia.org/wikipedia/commons/b/b3/Athletico_Paranaense_2019.png"},
-    "Atletico-MG": {"preco": 159.90, "sigla": "CAM", "cor": "#212121", "arquivo": "atletico_mg.png", "url": "https://upload.wikimedia.org/wikipedia/commons/5/5f/Clube_Atl%C3%A9tico_Mineiro_logo.png"},
-    "Bahia": {"preco": 139.90, "sigla": "BAH", "cor": "#1565c0", "arquivo": "bahia.png", "url": "https://upload.wikimedia.org/wikipedia/pt/9/90/Esporte_Clube_Bahia_logo.png"},
-    "Botafogo": {"preco": 149.90, "sigla": "BOT", "cor": "#111111", "arquivo": "botafogo.png", "url": "https://upload.wikimedia.org/wikipedia/commons/5/52/Botafogo_de_Futebol_e_Regatas_logo.png"},
-    "Chapecoense": {"preco": 119.90, "sigla": "CHA", "cor": "#2e7d32", "arquivo": "chapecoense.png", "url": "https://upload.wikimedia.org/wikipedia/commons/a/a2/Associa%C3%A7%C3%A3o_Chapecoense_de_Futebol.png"},
-    "Corinthians": {"preco": 169.90, "sigla": "COR", "cor": "#424242", "arquivo": "corinthians.png", "url": "https://upload.wikimedia.org/wikipedia/pt/b/b4/Corinthians_simbolo.png"},
-    "Coritiba": {"preco": 129.90, "sigla": "CFC", "cor": "#388e3c", "arquivo": "coritiba.png", "url": "https://upload.wikimedia.org/wikipedia/commons/2/27/Coritiba_FCD.png"},
-    "Cruzeiro": {"preco": 159.90, "sigla": "CRU", "cor": "#1565c0", "arquivo": "cruzeiro.png", "url": "https://upload.wikimedia.org/wikipedia/commons/9/90/Cruzeiro_Esporte_Clube_%28logo%29.png"},
-    "Flamengo": {"preco": 179.90, "sigla": "FLA", "cor": "#b71c1c", "arquivo": "flamengo.png", "url": "https://upload.wikimedia.org/wikipedia/commons/2/2e/Flamengo_brazilian_matching.png"},
-    "Fluminense": {"preco": 159.90, "sigla": "FLU", "cor": "#00695c", "arquivo": "fluminense.png", "url": "https://upload.wikimedia.org/wikipedia/pt/a/a3/FFC_crest.png"},
-    "Gremio": {"preco": 159.90, "sigla": "GRE", "cor": "#0277bd", "arquivo": "gremio.png", "url": "https://upload.wikimedia.org/wikipedia/commons/7/7b/Gremio_logo.png"},
-    "Internacional": {"preco": 159.90, "sigla": "INT", "cor": "#d32f2f", "arquivo": "internacional.png", "url": "https://upload.wikimedia.org/wikipedia/commons/f/f1/Escudo_do_Sport_Club_Internacional.png"},
-    "Mirassol": {"preco": 119.90, "sigla": "MIR", "cor": "#f9a825", "arquivo": "mirassol.png", "url": "https://upload.wikimedia.org/wikipedia/commons/8/87/Mirassol_FC_logo.png"},
-    "Palmeiras": {"preco": 179.90, "sigla": "PAL", "cor": "#1b5e20", "arquivo": "palmeiras.png", "url": "https://upload.wikimedia.org/wikipedia/commons/1/10/Palmeiras_logo.png"},
-    "Red Bull Bragantino": {"preco": 139.90, "sigla": "RBB", "cor": "#d32f2f", "arquivo": "bragantino.png", "url": "https://upload.wikimedia.org/wikipedia/pt/9/9e/RedBullBragantino.png"},
-    "Remo": {"preco": 119.90, "sigla": "REM", "cor": "#283593", "arquivo": "remo.png", "url": "https://upload.wikimedia.org/wikipedia/commons/6/6f/Clube_do_Remo_logo.png"},
-    "Santos": {"preco": 149.90, "sigla": "SAN", "cor": "#212121", "arquivo": "santos.png", "url": "https://upload.wikimedia.org/wikipedia/commons/3/35/Santos_logo.png"},
-    "Sao Paulo": {"preco": 169.90, "sigla": "SPFC", "cor": "#c62828", "arquivo": "sao_paulo.png", "url": "https://upload.wikimedia.org/wikipedia/commons/6/6f/Brasao_do_Sao_Paulo_Futebol_Clube.png"},
-    "Vasco": {"preco": 159.90, "sigla": "VAS", "cor": "#212121", "arquivo": "vasco.png", "url": "https://upload.wikimedia.org/wikipedia/pt/a/ac/CRVascodaGama.png"},
-    "Vitoria": {"preco": 129.90, "sigla": "VIT", "cor": "#c62828", "arquivo": "vitoria.png", "url": "https://upload.wikimedia.org/wikipedia/commons/0/07/EC_Vitoria_logo.png"}
+    "Athletico-PR": {"preco": 340.90, "sigla": "CAP", "cor": "#C62828", "icone": "🛡️🔴"},
+    "Atletico-MG": {"preco": 159.90, "sigla": "CAM", "cor": "#212121", "icone": "🛡️⚫"},
+    "Bahia": {"preco": 300.90, "sigla": "BAH", "cor": "#1565C0", "icone": "🛡️🔵"},
+    "Botafogo": {"preco": 149.90, "sigla": "BOT", "cor": "#111111", "icone": "🛡️⭐"},
+    "Chapecoense": {"preco": 119.90, "sigla": "CHA", "cor": "#2E7D32", "icone": "🛡️🟢"},
+    "Corinthians": {"preco": 360.90, "sigla": "COR", "cor": "#424242", "icone": "🛡️🦅"},
+    "Coritiba": {"preco": 420.90, "sigla": "CFC", "cor": "#388E3C", "icone": "🛡️🟢"},
+    "Cruzeiro": {"preco": 432.90, "sigla": "CRU", "cor": "#1565C0", "icone": "🛡️🦊"},
+    "Flamengo": {"preco": 350.90, "sigla": "FLA", "cor": "#B71C1C", "icone": "🛡️🔴"},
+    "Fluminense": {"preco": 159.90, "sigla": "FLU", "cor": "#00695C", "icone": "🛡️🇭🇺"},
+    "Gremio": {"preco": 300.90, "sigla": "GRE", "cor": "#0277BD", "icone": "🛡️🇪🇪"},
+    "Internacional": {"preco": 500.90, "sigla": "INT", "cor": "#D32F2F", "icone": "🛡️🇦🇹"},
+    "Mirassol": {"preco": 119.90, "sigla": "MIR", "cor": "#F9A825", "icone": "🛡️🟡"},
+    "Palmeiras": {"preco": 179.90, "sigla": "PAL", "cor": "#1B5E20", "icone": "🛡️🐷"},
+    "Red Bull Bragantino": {"preco": 139.90, "sigla": "RBB", "cor": "#D32F2F", "icone": "🛡️🐂"},
+    "Remo": {"preco": 119.90, "sigla": "REM", "cor": "#283593", "icone": "🛡️⚓"},
+    "Santos": {"preco": 149.90, "sigla": "SAN", "cor": "#212121", "icone": "🛡️🐳"},
+    "Sao Paulo": {"preco": 169.90, "sigla": "SPFC", "cor": "#C62828", "icone": "🛡️🇾🇪"},
+    "Vasco": {"preco": 159.90, "sigla": "VAS", "cor": "#212121", "icone": "🛡️◤🇲🇰◢"},
+    "Vitoria": {"preco": 129.90, "sigla": "VIT", "cor": "#C62828", "icone": "🛡️🦁"}
 }
 
-times = list(times_dados.keys())
-
-# Criar pasta de escudos se não existir
-if not os.path.exists(PASTA_ESCUDOS):
-    os.makedirs(PASTA_ESCUDOS)
-
-
-def baixar_escudos_automaticamente():
-    """Baixa os arquivos PNG automaticamente caso não existam localmente."""
-    headers = {'User-Agent': 'Mozilla/5.0'}
-    for time, info in times_dados.items():
-        caminho_local = os.path.join(PASTA_ESCUDOS, info["arquivo"])
-        if not os.path.exists(caminho_local):
-            try:
-                req = urllib.request.Request(info["url"], headers=headers)
-                with urllib.request.urlopen(req) as response, open(caminho_local, 'wb') as out_file:
-                    out_file.write(response.read())
-            except Exception:
-                pass
-
-# Baixa imagens ao iniciar
-baixar_escudos_automaticamente()
-
-
 # =====================================================
-# BANCO DE DADOS
+# INICIALIZAÇÃO E CONEXÃO COM O BANCO DE DADOS (SQLITE)
 # =====================================================
-
-conexao = sqlite3.connect(BANCO)
+conexao = sqlite3.connect(BANCO, check_same_thread=False)
 cursor = conexao.cursor()
 
+# Tabela de Produtos/Estoque
 cursor.execute("""
 CREATE TABLE IF NOT EXISTS produtos (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     nome TEXT NOT NULL,
-    preco REAL NOT NULL
+    preco REAL NOT NULL,
+    estoque_pp INTEGER DEFAULT 20,
+    estoque_p INTEGER DEFAULT 20,
+    estoque_m INTEGER DEFAULT 20,
+    estoque_g INTEGER DEFAULT 20,
+    estoque_gg INTEGER DEFAULT 20,
+    estoque_xg INTEGER DEFAULT 20
 )
 """)
 
+# Tabela de Pedidos
 cursor.execute("""
 CREATE TABLE IF NOT EXISTS pedidos (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     cliente TEXT NOT NULL,
+    telefone TEXT NOT NULL,
+    cpf TEXT NOT NULL,
+    endereco TEXT NOT NULL,
+    regiao TEXT NOT NULL,
+    obs TEXT NOT NULL,
     detalhes TEXT NOT NULL,
     subtotal REAL NOT NULL,
+    desconto REAL NOT NULL,
     taxa_entrega REAL NOT NULL,
     total REAL NOT NULL,
     data TEXT NOT NULL,
+    previsao TEXT NOT NULL,
     rastreio TEXT NOT NULL,
     pagamento TEXT NOT NULL,
+    banco TEXT NOT NULL,
+    brinde TEXT NOT NULL,
     status TEXT NOT NULL
 )
 """)
-
-cursor.execute("SELECT COUNT(*) FROM produtos")
-if cursor.fetchone()[0] == 0:
-    for time in times:
-        cursor.execute(
-            "INSERT INTO produtos (nome, preco) VALUES (?, ?)",
-            ("Camisa " + time, times_dados[time]["preco"])
-        )
-
 conexao.commit()
 
+# Carga inicial do catálogo no banco de dados
+cursor.execute("SELECT COUNT(*) FROM produtos")
+if cursor.fetchone()[0] == 0:
+    for time, dados in times_dados.items():
+        cursor.execute("""
+            INSERT INTO produtos (nome, preco, estoque_pp, estoque_p, estoque_m, estoque_g, estoque_gg, estoque_xg)
+            VALUES (?, ?, 20, 20, 20, 20, 20, 20)
+        """, ("Camisa " + time, dados["preco"]))
+    conexao.commit()
 
 # =====================================================
-# INTERFACE GRÁFICA AJUSTADA (TAMANHO COMPACTO)
+# INTERFACE GRÁFICA PRINCIPAL
 # =====================================================
-
-janela = tk.Tk()
+janela = ctk.CTk()
 janela.title(NOME_LOJA)
-
-# Definir tamanho ideal compacto (1100x680) e centralizar na tela
-LARGURA_JANELA = 1100
-ALTURA_JANELA = 680
-
-largura_tela = janela.winfo_screenwidth()
-altura_tela = janela.winfo_screenheight()
-
-pos_x = (largura_tela // 2) - (LARGURA_JANELA // 2)
-pos_y = (altura_tela // 2) - (ALTURA_JANELA // 2)
-
-janela.geometry(f"{LARGURA_JANELA}x{ALTURA_JANELA}+{pos_x}+{pos_y}")
-janela.resizable(True, True)  # Permite redimensionar se necessário
-janela.configure(bg="#f4f6f9")
+janela.geometry("1220x960")
 
 carrinho = []
 time_selecionado = None
 botoes_times_dados = []
-imagens_carregadas = {}
+cards_times_lista = []
+desconto_aplicado = 0.0
+cupom_ativo = ""
 
+# Variáveis globais para guardar a referência das janelas abertas
+win_admin = None
+win_historico = None
 
-def obter_escudo_widget(parent, time):
-    """Carrega o escudo dimensionado em 36x36 px para economizar espaço."""
-    info = times_dados.get(time, {})
-    caminho_imagem = os.path.join(PASTA_ESCUDOS, info.get("arquivo", ""))
+janela.grid_columnconfigure(0, weight=6)
+janela.grid_columnconfigure(1, weight=5)
+janela.grid_rowconfigure(0, weight=1)
 
-    if HAS_PIL and os.path.exists(caminho_imagem):
-        try:
-            img = Image.open(caminho_imagem).convert("RGBA")
-            img = img.resize((36, 36), Image.Resampling.LANCZOS)
-            photo = ImageTk.PhotoImage(img)
-            imagens_carregadas[time] = photo
-            
-            lbl_img = tk.Label(parent, image=photo, bg="white")
-            return lbl_img
-        except Exception:
-            pass
+frame_superior_tema = ctk.CTkFrame(janela, fg_color="transparent")
+frame_superior_tema.grid(row=0, column=0, columnspan=2, sticky="ew", padx=15, pady=(5, 0))
 
-    # Desenho alternativo em Canvas
-    canvas = tk.Canvas(parent, width=36, height=36, bg="white", highlightthickness=0)
-    cor = info.get("cor", "#333333")
-    sigla = info.get("sigla", "TIME")
+def alternar_modo_tema():
+    if ctk.get_appearance_mode() == "Dark":
+        ctk.set_appearance_mode("Light")
+        btn_tema.configure(text="🌙 Modo Escuro")
+    else:
+        ctk.set_appearance_mode("Dark")
+        btn_tema.configure(text="☀️ Modo Claro")
 
-    canvas.create_polygon(3, 3, 33, 3, 33, 23, 18, 33, 3, 23, fill=cor, outline="#000", width=1)
-    canvas.create_polygon(6, 6, 30, 6, 30, 21, 18, 29, 6, 21, fill="white", outline="#000", width=1)
-    canvas.create_text(18, 15, text=sigla, font=("Arial", 6, "bold"), fill=cor)
+btn_tema = ctk.CTkButton(frame_superior_tema, text="☀️ Modo Claro", width=130, height=26, fg_color="#FF9800", hover_color="#F57C00", text_color="#000000", font=ctk.CTkFont(weight="bold"), command=alternar_modo_tema)
+btn_tema.pack(side="right")
 
-    return canvas
+frame_esquerdo = ctk.CTkFrame(janela, corner_radius=15, border_width=2, border_color="#FF9800")
+frame_esquerdo.grid(row=0, column=0, padx=12, pady=(35, 12), sticky="nsew")
 
+frame_topo_loja = ctk.CTkFrame(frame_esquerdo, fg_color="#1E1E2C", corner_radius=10)
+frame_topo_loja.pack(fill="x", padx=15, pady=(12, 5))
 
-def selecionar_time(time):
-    global time_selecionado
-    time_selecionado = time
-    label_selecionado.config(text=f"Time selecionado: {time}")
+lbl_gato = ctk.CTkLabel(frame_topo_loja, text="🐱⚽", font=ctk.CTkFont(size=36))
+lbl_gato.pack(side="left", padx=10, pady=8)
 
-    for botao, nome_time in botoes_times_dados:
-        if nome_time == time:
-            botao.config(bg="#2e7d32", fg="white", text="OK ✓")
+frame_titulos = ctk.CTkFrame(frame_topo_loja, fg_color="transparent")
+frame_titulos.pack(side="left", fill="both", expand=True, padx=5, pady=5)
+
+ctk.CTkLabel(frame_titulos, text=NOME_LOJA, font=ctk.CTkFont(size=16, weight="bold"), text_color="#FFD700").pack(anchor="w", pady=(2, 0))
+
+frame_insta = ctk.CTkFrame(frame_titulos, fg_color="transparent")
+frame_insta.pack(anchor="w", pady=1)
+
+ctk.CTkLabel(frame_insta, text="🛡️", font=ctk.CTkFont(size=13)).pack(side="left", padx=(0, 4))
+ctk.CTkLabel(frame_insta, text=INSTAGRAM_LOJA, font=ctk.CTkFont(size=12, weight="bold"), text_color="#E1306C").pack(side="left")
+
+ctk.CTkLabel(frame_titulos, text="🐾 O Gato artilheiro do Inter e dos mantos!", font=ctk.CTkFont(size=10, weight="bold"), text_color="#00E676").pack(anchor="w", pady=(0, 2))
+
+lbl_banner_boas_vindas = ctk.CTkLabel(
+    frame_esquerdo, 
+    text="OLÁ SEJA BEM VINDO A LOJA NAÇÃO DOS MANTOS O QUE DESEJA?", 
+    font=ctk.CTkFont(size=15, weight="bold"), 
+    text_color="#FF1744",
+    justify="center"
+)
+lbl_banner_boas_vindas.pack(fill="x", padx=15, pady=(2, 8))
+
+frame_busca = ctk.CTkFrame(frame_esquerdo, fg_color="transparent")
+frame_busca.pack(fill="x", padx=15, pady=2)
+
+def filtrar_times(event=None):
+    termo = campo_busca.get().lower()
+    for card, nome_time in cards_times_lista:
+        if termo in nome_time.lower():
+            card.pack(fill="x", padx=5, pady=4)
         else:
-            botao.config(bg="#b71c1c", fg="white", text="Selecionar")
+            card.pack_forget()
 
+campo_busca = ctk.CTkEntry(frame_busca, placeholder_text="🔍 Pesquisar time...", height=30)
+campo_busca.pack(fill="x", padx=0, pady=2)
+campo_busca.bind("<KeyRelease>", filtrar_times)
 
-def calcular_totais():
-    subtotal = sum(item["subtotal"] for item in carrinho)
-    entrega = TAXA_ENTREGA if carrinho else 0.00
-    total = subtotal + entrega
-    return subtotal, entrega, total
+scroll_times = ctk.CTkScrollableFrame(frame_esquerdo, label_text="🔥 MANTOS DISPONÍVEIS", label_text_color="#FFD700", height=160)
+scroll_times.pack(fill="both", expand=True, padx=15, pady=5)
 
+def selecionar_time(nome_time, btn_ref):
+    global time_selecionado
+    time_selecionado = nome_time
+    label_selecionado.configure(text=f"Time Selecionado: {nome_time}", text_color="#00E676")
 
-def atualizar_total():
-    subtotal, entrega, total = calcular_totais()
-    label_subtotal.config(text=f"Subtotal: R$ {subtotal:.2f}".replace(".", ","))
-    label_entrega.config(text=f"Taxa de Entrega: R$ {entrega:.2f}".replace(".", ","))
-    label_total.config(text=f"TOTAL: R$ {total:.2f}".replace(".", ","))
+    for btn, _ in botoes_times_dados:
+        btn.configure(fg_color="#D500F9", hover_color="#AA00FF", text="Selecionar")
+    btn_ref.configure(fg_color="#00E676", hover_color="#00C853", text="Selecionado ✓", text_color="#000000")
 
+def construir_catalogo():
+    global cards_times_lista, botoes_times_dados
+    for card, _ in cards_times_lista:
+        card.destroy()
+    cards_times_lista.clear()
+    botoes_times_dados.clear()
 
-def atualizar_carrinho():
-    lista_carrinho.delete(*lista_carrinho.get_children())
+    cursor.execute("SELECT id, nome, preco FROM produtos")
+    for prod_id, nome_prod, preco in cursor.fetchall():
+        nome_time = nome_prod.replace("Camisa ", "")
+        info_time = times_dados.get(nome_time, {"icone": "🛡️", "cor": "#FF9800"})
+        
+        card = ctk.CTkFrame(scroll_times, corner_radius=10, fg_color="#1E1E2C")
+        card.pack(fill="x", padx=5, pady=4)
 
-    for item in carrinho:
-        personalizado = "Sim" if item["personalizado"] else "Não"
-        lista_carrinho.insert(
-            "",
-            "end",
-            values=(
-                item["produto"],
-                item["tamanho"],
-                personalizado,
-                item["quantidade"],
-                f"R$ {item['subtotal']:.2f}".replace(".", ",")
-            )
-        )
+        lbl_escudo = ctk.CTkLabel(card, text=info_time["icone"], font=ctk.CTkFont(size=22))
+        lbl_escudo.pack(side="left", padx=(10, 5), pady=4)
 
-    atualizar_total()
+        barra_cor = ctk.CTkFrame(card, width=4, height=24, fg_color=info_time["cor"])
+        barra_cor.pack(side="left", padx=(0, 8))
 
+        info_txt = f"{nome_time} — R$ {preco:.2f}".replace(".", ",")
+        lbl_info = ctk.CTkLabel(card, text=info_txt, font=ctk.CTkFont(size=13, weight="bold"), text_color="#FFFFFF")
+        lbl_info.pack(side="left", padx=2)
+
+        btn = ctk.CTkButton(card, text="Selecionar", width=95, height=28, fg_color="#D500F9", hover_color="#AA00FF", font=ctk.CTkFont(weight="bold"))
+        btn.configure(command=lambda t=nome_time, b=btn: selecionar_time(t, b))
+        btn.pack(side="right", padx=8, pady=4)
+        
+        botoes_times_dados.append((btn, nome_time))
+        cards_times_lista.append((card, nome_time))
+
+construir_catalogo()
+
+label_selecionado = ctk.CTkLabel(frame_esquerdo, text="Time selecionado: Nenhum", font=ctk.CTkFont(size=14, weight="bold"), text_color="#FF3D00")
+label_selecionado.pack(anchor="w", padx=15, pady=2)
+
+frame_opcoes = ctk.CTkFrame(frame_esquerdo, corner_radius=10, fg_color="#1E1E2C", border_width=1, border_color="#FFD700")
+frame_opcoes.pack(fill="x", padx=15, pady=5)
+
+box1 = ctk.CTkFrame(frame_opcoes, fg_color="transparent")
+box1.pack(fill="x", padx=10, pady=4)
+
+ctk.CTkLabel(box1, text="Tam:", font=ctk.CTkFont(weight="bold")).pack(side="left", padx=(0, 2))
+combo_tamanho = ctk.CTkComboBox(box1, values=["PP", "P", "M", "G", "GG", "XG"], width=65, button_color="#FF9800")
+combo_tamanho.set("M")
+combo_tamanho.pack(side="left", padx=2)
+
+ctk.CTkLabel(box1, text="Qtd:", font=ctk.CTkFont(weight="bold")).pack(side="left", padx=(6, 2))
+campo_quantidade = ctk.CTkEntry(box1, width=40)
+campo_quantidade.insert(0, "1")
+campo_quantidade.pack(side="left", padx=2)
+
+var_brinde_item = ctk.BooleanVar(value=True)
+chk_brinde_item = ctk.CTkCheckBox(box1, text="🎁 Brinde", variable=var_brinde_item, text_color="#FFD700", font=ctk.CTkFont(size=11, weight="bold"), checkbox_width=18, checkbox_height=18)
+chk_brinde_item.pack(side="left", padx=(10, 0))
 
 def ativar_personalizacao():
     if var_personalizar.get():
-        campo_nome.config(state="normal")
-        campo_numero.config(state="normal")
+        campo_nome.configure(state="normal")
+        campo_numero.configure(state="normal")
     else:
-        campo_nome.delete(0, tk.END)
-        campo_numero.delete(0, tk.END)
-        campo_nome.config(state="disabled")
-        campo_numero.config(state="disabled")
+        campo_nome.delete(0, 'end')
+        campo_numero.delete(0, 'end')
+        campo_nome.configure(state="disabled")
+        campo_numero.configure(state="disabled")
 
+var_personalizar = ctk.BooleanVar(value=False)
+chk_pers = ctk.CTkCheckBox(frame_opcoes, text="Personalizar (+R$ 20,00)", variable=var_personalizar, command=ativar_personalizacao, text_color="#FFD700", font=ctk.CTkFont(weight="bold"))
+chk_pers.pack(anchor="w", padx=10, pady=4)
+
+box2 = ctk.CTkFrame(frame_opcoes, fg_color="transparent")
+box2.pack(fill="x", padx=10, pady=(0, 6))
+
+campo_nome = ctk.CTkEntry(box2, placeholder_text="Nome na camisa", state="disabled", width=140)
+campo_nome.pack(side="left", padx=(0, 5))
+
+campo_numero = ctk.CTkEntry(box2, placeholder_text="N°", state="disabled", width=60)
+campo_numero.pack(side="left")
+
+def obter_taxa_entrega():
+    regiao = combo_regiao.get()
+    if "Capital" in regiao: return 15.00
+    elif "Metropolitana" in regiao: return 30.00
+    elif "Interior" in regiao: return 35.00
+    return 15.00
+
+def calcular_totais():
+    subtotal = sum(item["subtotal"] for item in carrinho)
+    entrega = obter_taxa_entrega() if carrinho else 0.00
+    total = max(0.0, subtotal - desconto_aplicado + entrega)
+    return subtotal, desconto_aplicado, entrega, total
+
+def atualizar_total(event=None):
+    sub, desc, ent, tot = calcular_totais()
+    label_subtotal.configure(text=f"Subtotal: R$ {sub:.2f}".replace(".", ","))
+    label_desconto.configure(text=f"Desconto: -R$ {desc:.2f}".replace(".", ","))
+    label_entrega.configure(text=f"Taxa de Entrega: R$ {ent:.2f}".replace(".", ","))
+    label_total.configure(text=f"TOTAL: R$ {tot:.2f}".replace(".", ","))
+
+def atualizar_carrinho():
+    for row in lista_carrinho.get_children():
+        lista_carrinho.delete(row)
+
+    for item in carrinho:
+        pers_txt = f"{item['nome']} #{item['numero']}" if item["personalizado"] else "Não"
+        lista_carrinho.insert("", "end", values=(
+            item["produto"],
+            item["tamanho"],
+            pers_txt,
+            item["quantidade"],
+            item["brinde"],
+            f"R$ {item['subtotal']:.2f}".replace(".", ",")
+        ))
+    atualizar_total()
 
 def adicionar_carrinho():
     if time_selecionado is None:
         messagebox.showwarning("Aviso", "Selecione um time primeiro.")
         return
 
-    tamanho = combo_tamanho.get()
-    if not tamanho:
-        messagebox.showwarning("Aviso", "Selecione o tamanho da camisa.")
-        return
-
     try:
-        quantidade = int(campo_quantidade.get())
-        if quantidade <= 0:
-            raise ValueError
+        qtd = int(campo_quantidade.get())
+        if qtd <= 0: raise ValueError
     except ValueError:
         messagebox.showerror("Erro", "Digite uma quantidade válida.")
+        return
+
+    tamanho = combo_tamanho.get()
+    brinde_escolhido = "Sim (Chaveiro/Adesivo)" if var_brinde_item.get() else "Não"
+    coluna_estoque = f"estoque_{tamanho.lower()}"
+    
+    cursor.execute(f"SELECT {coluna_estoque}, preco FROM produtos WHERE nome = ?", ("Camisa " + time_selecionado,))
+    res = cursor.fetchone()
+    if not res:
+        messagebox.showerror("Erro", "Produto não encontrado no banco de dados.")
+        return
+    
+    estoque_atual, preco_unit = res
+    if qtd > estoque_atual:
+        messagebox.showwarning("Estoque Insuficiente", f"Apenas {estoque_atual} unidades disponíveis no tamanho {tamanho}!")
         return
 
     personalizado = var_personalizar.get()
     nome = campo_nome.get().strip()
     numero = campo_numero.get().strip()
 
-    if personalizado and (not nome or not numero):
-        messagebox.showwarning("Aviso", "Preencha o nome e o número para personalização.")
-        return
-
-    preco_unitario = times_dados[time_selecionado]["preco"]
     if personalizado:
-        preco_unitario += PRECO_PERSONALIZACAO
+        if not nome or not numero:
+            messagebox.showwarning("Aviso", "Preencha o nome e o número para personalização.")
+            return
+        if not numero.isdigit():
+            messagebox.showerror("Erro", "O número deve conter apenas dígitos!")
+            return
+        preco_unit += PRECO_PERSONALIZACAO
 
-    subtotal = preco_unitario * quantidade
+    subtotal = preco_unit * qtd
 
-    item = {
+    carrinho.append({
         "produto": "Camisa " + time_selecionado,
         "tamanho": tamanho,
         "personalizado": personalizado,
         "nome": nome,
         "numero": numero,
-        "quantidade": quantidade,
+        "quantidade": qtd,
+        "brinde": brinde_escolhido,
         "subtotal": subtotal
-    }
-
-    carrinho.append(item)
+    })
     atualizar_carrinho()
 
+ctk.CTkButton(
+    frame_esquerdo, 
+    text="+ ADICIONAR AO CARRINHO", 
+    font=ctk.CTkFont(size=14, weight="bold"), 
+    fg_color="#FF6D00", 
+    hover_color="#E65100", 
+    height=34, 
+    command=adicionar_carrinho
+).pack(fill="x", padx=15, pady=(2, 10))
+
+# Frame Direito - Carrinho e Checkout
+frame_direito = ctk.CTkFrame(janela, corner_radius=15, border_width=2, border_color="#D500F9")
+frame_direito.grid(row=0, column=1, padx=12, pady=(35, 12), sticky="nsew")
+
+ctk.CTkLabel(frame_direito, text="🛒 CARRINHO DE COMPRAS", font=ctk.CTkFont(size=15, weight="bold"), text_color="#FFD700").pack(anchor="w", padx=15, pady=(8, 2))
+
+tree_frame = ctk.CTkFrame(frame_direito)
+tree_frame.pack(fill="both", expand=True, padx=15, pady=2)
+
+lista_carrinho = ttk.Treeview(
+    tree_frame,
+    columns=("produto", "tamanho", "personalizado", "quantidade", "brinde", "subtotal"),
+    show="headings",
+    height=4
+)
+
+cols = {"produto": "Produto", "tamanho": "Tam", "personalizado": "Pers.", "quantidade": "Qtd", "brinde": "Brinde", "subtotal": "Subtotal"}
+for c, t in cols.items():
+    lista_carrinho.heading(c, text=t)
+
+lista_carrinho.column("produto", width=110)
+lista_carrinho.column("tamanho", width=35)
+lista_carrinho.column("personalizado", width=65)
+lista_carrinho.column("quantidade", width=35)
+lista_carrinho.column("brinde", width=60)
+lista_carrinho.column("subtotal", width=65)
+
+lista_carrinho.pack(fill="both", expand=True)
 
 def remover_item():
     selecionado = lista_carrinho.selection()
     if not selecionado:
         messagebox.showwarning("Aviso", "Selecione um item para remover.")
         return
-
-    indice = lista_carrinho.index(selecionado[0])
-    carrinho.pop(indice)
+    idx = lista_carrinho.index(selecionado[0])
+    carrinho.pop(idx)
     atualizar_carrinho()
 
+ctk.CTkButton(frame_direito, text="✖ Remover Item", fg_color="#FF1744", hover_color="#D50000", font=ctk.CTkFont(weight="bold"), height=24, command=remover_item).pack(anchor="e", padx=15, pady=2)
+
+# Área de Cupom
+frame_cupom = ctk.CTkFrame(frame_direito, fg_color="transparent")
+frame_cupom.pack(fill="x", padx=15, pady=2)
+
+campo_cupom = ctk.CTkEntry(frame_cupom, placeholder_text="Cupom (ex: MANTO10)", width=150, height=26)
+campo_cupom.pack(side="left", padx=(0, 4))
+
+def aplicar_cupom():
+    global desconto_aplicado, cupom_ativo
+    codigo = campo_cupom.get().strip().upper()
+    subtotal_atual = sum(item["subtotal"] for item in carrinho)
+    
+    if not carrinho:
+        messagebox.showwarning("Aviso", "Adicione itens ao carrinho antes de aplicar o cupom.")
+        return
+
+    if codigo == "MANTO10":
+        desconto_aplicado = subtotal_atual * 0.10
+        cupom_ativo = "MANTO10 (10%)"
+        messagebox.showinfo("Sucesso", "Cupom MANTO10 aplicado! 10% de desconto.")
+    elif codigo == "PRIMEIRA":
+        desconto_aplicado = 15.00
+        cupom_ativo = "PRIMEIRA (R$ 15 OFF)"
+        messagebox.showinfo("Sucesso", "Cupom PRIMEIRA aplicado! R$ 15,00 de desconto.")
+    else:
+        desconto_aplicado = 0.0
+        cupom_ativo = ""
+        messagebox.showerror("Erro", "Cupom inválido!")
+    atualizar_total()
+
+ctk.CTkButton(frame_cupom, text="Aplicar Cupom", fg_color="#651FFF", hover_color="#4527A0", height=26, width=110, font=ctk.CTkFont(weight="bold"), command=aplicar_cupom).pack(side="left")
+
+label_subtotal = ctk.CTkLabel(frame_direito, text="Subtotal: R$ 0,00", font=ctk.CTkFont(size=12))
+label_subtotal.pack(anchor="e", padx=15)
+
+label_desconto = ctk.CTkLabel(frame_direito, text="Desconto: -R$ 0,00", font=ctk.CTkFont(size=12), text_color="#00E676")
+label_desconto.pack(anchor="e", padx=15)
+
+label_entrega = ctk.CTkLabel(frame_direito, text="Taxa de Entrega: R$ 0,00", font=ctk.CTkFont(size=12))
+label_entrega.pack(anchor="e", padx=15)
+
+label_total = ctk.CTkLabel(frame_direito, text="TOTAL: R$ 0,00", font=ctk.CTkFont(size=16, weight="bold"), text_color="#00E676")
+label_total.pack(anchor="e", padx=15, pady=(0, 4))
+
+# Formulário do Cliente
+frame_cliente = ctk.CTkFrame(frame_direito, corner_radius=10, fg_color="#1E1E2C")
+frame_cliente.pack(fill="x", padx=15, pady=2)
+
+campo_cliente = ctk.CTkEntry(frame_cliente, placeholder_text="Nome Completo", height=28)
+campo_cliente.pack(fill="x", padx=8, pady=(4, 2))
+
+box_contato = ctk.CTkFrame(frame_cliente, fg_color="transparent")
+box_contato.pack(fill="x", padx=8, pady=2)
+
+campo_tel = ctk.CTkEntry(box_contato, placeholder_text="WhatsApp / Telefone", height=28)
+campo_tel.pack(side="left", fill="x", expand=True, padx=(0, 4))
+
+campo_cpf = ctk.CTkEntry(box_contato, placeholder_text="CPF (Nota Fiscal)", height=28, width=130)
+campo_cpf.pack(side="left")
+
+campo_endereco = ctk.CTkEntry(frame_cliente, placeholder_text="Endereço (Rua, Número, Bairro)", height=28)
+campo_endereco.pack(fill="x", padx=8, pady=2)
+
+box_frete = ctk.CTkFrame(frame_cliente, fg_color="transparent")
+box_frete.pack(fill="x", padx=8, pady=2)
+
+ctk.CTkLabel(box_frete, text="Região Frete:", font=ctk.CTkFont(size=11, weight="bold")).pack(side="left", padx=(0, 4))
+combo_regiao = ctk.CTkComboBox(box_frete, values=["Capital (R$ 15,00)", "Região Metropolitana (R$ 30,00)", "Interior (R$ 35,00)"], command=atualizar_total, height=26)
+combo_regiao.set("Capital (R$ 15,00)")
+combo_regiao.pack(side="left", fill="x", expand=True)
+
+box_pag_banco = ctk.CTkFrame(frame_cliente, fg_color="transparent")
+box_pag_banco.pack(fill="x", padx=8, pady=2)
+
+ctk.CTkLabel(box_pag_banco, text="Pgto:", font=ctk.CTkFont(size=11, weight="bold")).pack(side="left", padx=(0, 2))
+combo_pagamento = ctk.CTkComboBox(box_pag_banco, values=["Pix", "Cartão de Crédito", "Cartão de Débito", "Dinheiro"], button_color="#651FFF", height=26, width=115)
+combo_pagamento.set("Pix")
+combo_pagamento.pack(side="left", padx=(0, 6))
+
+ctk.CTkLabel(box_pag_banco, text="Banco:", font=ctk.CTkFont(size=11, weight="bold")).pack(side="left", padx=(0, 2))
+combo_banco_cliente = ctk.CTkComboBox(box_pag_banco, values=["Nubank", "Itaú", "Bradesco", "Banco do Brasil", "Santander", "Caixa", "Inter"], button_color="#2979FF", height=26)
+combo_banco_cliente.set("Nubank")
+combo_banco_cliente.pack(side="left", fill="x", expand=True)
+
+campo_obs = ctk.CTkEntry(frame_cliente, placeholder_text="Observações (ex: Deixar na portaria)", height=28)
+campo_obs.pack(fill="x", padx=8, pady=(2, 6))
 
 def gerar_cliente():
     nome = fake.name() if fake else "Cliente Automático"
-    campo_cliente.delete(0, tk.END)
+    tel = fake.phone_number() if fake else "(11) 99999-9999"
+    cpf = fake.cpf() if fake else "123.456.789-00"
+    endereco_fake = fake.address() if fake else "Rua Exemplo, 123"
+    campo_cliente.delete(0, 'end')
     campo_cliente.insert(0, nome)
+    campo_tel.delete(0, 'end')
+    campo_tel.insert(0, tel)
+    campo_cpf.delete(0, 'end')
+    campo_cpf.insert(0, cpf)
+    campo_endereco.delete(0, 'end')
+    campo_endereco.insert(0, endereco_fake.replace("\n", ", "))
+    campo_obs.delete(0, 'end')
+    campo_obs.insert(0, "Entregar com cuidado")
 
+ctk.CTkButton(frame_cliente, text="⚡ Preencher Automático (Faker)", fg_color="#651FFF", hover_color="#4527A0", font=ctk.CTkFont(weight="bold"), height=24, command=gerar_cliente).pack(fill="x", padx=8, pady=(0, 4))
 
 def finalizar_pedido():
     if not carrinho:
@@ -303,242 +550,244 @@ def finalizar_pedido():
         return
 
     cliente = campo_cliente.get().strip()
+    telefone = campo_tel.get().strip()
+    cpf = campo_cpf.get().strip()
+    endereco = campo_endereco.get().strip()
+    regiao = combo_regiao.get()
+    obs = campo_obs.get().strip() or "Nenhuma"
     pagamento = combo_pagamento.get()
+    banco = combo_banco_cliente.get()
+    brinde = "Sim (Chaveiro/Adesivo)"
 
-    if not cliente:
-        messagebox.showwarning("Aviso", "Digite o nome do cliente.")
+    if not cliente or not telefone or not endereco:
+        messagebox.showwarning("Aviso", "Preencha o nome, telefone e endereço.")
         return
 
-    if not pagamento:
-        messagebox.showwarning("Aviso", "Selecione a forma de pagamento.")
-        return
-
-    subtotal, entrega, total = calcular_totais()
-
+    subtotal, desconto, entrega, total = calcular_totais()
     detalhes = []
+    
+    # Baixa no estoque
     for item in carrinho:
+        tamanho = item["tamanho"].lower()
+        col_est = f"estoque_{tamanho}"
+        prod_nome = item["produto"]
+        
+        cursor.execute(f"UPDATE produtos SET {col_est} = {col_est} - ? WHERE nome = ?", (item["quantidade"], prod_nome))
+        
         desc = f"{item['quantidade']}x {item['produto']} ({item['tamanho']})"
         if item["personalizado"]:
             desc += f" [Pers: {item['nome']} N°{item['numero']}]"
         detalhes.append(desc)
 
+    conexao.commit()
+    construir_catalogo()
+
     detalhes_texto = " | ".join(detalhes)
     data = datetime.now().strftime("%d/%m/%Y %H:%M")
+    previsao_data = (datetime.now() + timedelta(days=4)).strftime("%d/%m/%Y")
     rastreio = "NM" + str(random.randint(100000, 999999)) + "BR"
     status = "Aguardando Envio"
 
-    cursor.execute("""
-        INSERT INTO pedidos (cliente, detalhes, subtotal, taxa_entrega, total, data, rastreio, pagamento, status)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-    """, (cliente, detalhes_texto, subtotal, entrega, total, data, rastreio, pagamento, status))
-
-    conexao.commit()
+    # Salva no Banco de Dados
+    with conexao:
+        cursor.execute("""
+            INSERT INTO pedidos (cliente, telefone, cpf, endereco, regiao, obs, detalhes, subtotal, desconto, taxa_entrega, total, data, previsao, rastreio, pagamento, banco, brinde, status)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (cliente, telefone, cpf, endereco, regiao, obs, detalhes_texto, subtotal, desconto, entrega, total, data, previsao_data, rastreio, pagamento, banco, brinde, status))
 
     carrinho.clear()
+    global desconto_aplicado, cupom_ativo
+    desconto_aplicado = 0.0
+    cupom_ativo = ""
     atualizar_carrinho()
-    campo_cliente.delete(0, tk.END)
-    combo_pagamento.set("")
+    campo_cliente.delete(0, 'end')
+    campo_tel.delete(0, 'end')
+    campo_cpf.delete(0, 'end')
+    campo_endereco.delete(0, 'end')
+    campo_obs.delete(0, 'end')
 
-    messagebox.showinfo(
-        "Pedido Finalizado",
-        f"✅ Pedido cadastrado com sucesso!\n\n"
-        f"👤 Cliente: {cliente}\n"
-        f"💳 Pagamento: {pagamento}\n"
-        f"📦 Rastreio: {rastreio}\n"
-        f"💵 Subtotal: R$ {subtotal:.2f}\n"
-        f"🚚 Taxa de Entrega: R$ {entrega:.2f}\n"
-        f"💰 TOTAL FINAL: R$ {total:.2f}\n"
-        f"📌 Status: {status}"
-    )
+    messagebox.showinfo("Sucesso", f"✅ Pedido finalizado e gravado no Banco de Dados!\nBanco Registrado: {banco}\nRastreio: {rastreio}")
 
+ctk.CTkButton(
+    frame_direito, 
+    text="FINALIZAR PEDIDO 🚀", 
+    font=ctk.CTkFont(size=14, weight="bold"), 
+    fg_color="#00E676", 
+    hover_color="#00C853", 
+    text_color="#000000",
+    height=36, 
+    command=finalizar_pedido
+).pack(fill="x", padx=15, pady=(4, 6))
 
+frame_botoes_gestao = ctk.CTkFrame(frame_direito, fg_color="transparent")
+frame_botoes_gestao.pack(fill="x", padx=15, pady=(0, 10))
+
+# =====================================================
+# FUNÇÃO CORRIGIDA: GESTÃO DE ESTOQUE (ADMIN)
+# =====================================================
+def abrir_painel_admin():
+    global win_admin
+    
+    if win_admin is not None and win_admin.winfo_exists():
+        win_admin.lift()
+        win_admin.focus_force()
+        return
+
+    win_admin = ctk.CTkToplevel(janela)
+    win_admin.title("Gestão de Estoque e Produtos")
+    win_admin.geometry("900x450")
+    
+    win_admin.lift()
+    win_admin.focus_force()
+
+    tabela = ttk.Treeview(win_admin, columns=("id", "nome", "preco", "pp", "p", "m", "g", "gg", "xg"), show="headings")
+    colunas = {"id": "ID", "nome": "Produto", "preco": "Preço", "pp": "PP", "p": "P", "m": "M", "g": "G", "gg": "GG", "xg": "XG"}
+    for c, t in colunas.items():
+        tabela.heading(c, text=t)
+        tabela.column(c, width=80 if c != "nome" else 180)
+    tabela.pack(fill="both", expand=True, padx=10, pady=10)
+
+    def carregar_dados_admin():
+        for row in tabela.get_children():
+            tabela.delete(row)
+        cursor.execute("SELECT id, nome, preco, estoque_pp, estoque_p, estoque_m, estoque_g, estoque_gg, estoque_xg FROM produtos")
+        for p in cursor.fetchall():
+            tabela.insert("", "end", values=(p[0], p[1], f"R$ {p[2]:.2f}", p[3], p[4], p[5], p[6], p[7], p[8]))
+
+    carregar_dados_admin()
+
+    def alterar_preco():
+        sel = tabela.selection()
+        if not sel:
+            messagebox.showwarning("Aviso", "Selecione um produto.")
+            return
+        item = tabela.item(sel[0])
+        prod_id = item["values"][0]
+        
+        top_preco = ctk.CTkToplevel(win_admin)
+        top_preco.geometry("300x150")
+        top_preco.title("Alterar Preço")
+        top_preco.lift()
+        top_preco.focus_force()
+        
+        ent = ctk.CTkEntry(top_preco, placeholder_text="Novo Preço (ex: 159.90)")
+        ent.pack(padx=20, pady=20, fill="x")
+        
+        def salvar():
+            try:
+                novo_p = float(ent.get().replace(",", "."))
+                with conexao:
+                    cursor.execute("UPDATE produtos SET preco = ? WHERE id = ?", (novo_p, prod_id))
+                carregar_dados_admin()
+                construir_catalogo()
+                top_preco.destroy()
+                messagebox.showinfo("Sucesso", "Preço atualizado no Banco de Dados!")
+            except ValueError:
+                messagebox.showerror("Erro", "Valor inválido.")
+
+        ctk.CTkButton(top_preco, text="Salvar", command=salvar, fg_color="#00E676", text_color="#000000").pack(padx=20)
+
+    ctk.CTkButton(win_admin, text="💰 Alterar Preço do Produto Selecionado", fg_color="#2979FF", command=alterar_preco).pack(pady=10)
+
+# =====================================================
+# FUNÇÃO CORRIGIDA: HISTÓRICO DE PEDIDOS
+# =====================================================
 def mostrar_historico():
-    tela = tk.Toplevel(janela)
-    tela.title("Histórico de Pedidos")
-    tela.geometry("900x400")
-    tela.configure(bg="white")
+    global win_historico
+
+    if win_historico is not None and win_historico.winfo_exists():
+        win_historico.lift()
+        win_historico.focus_force()
+        return
+
+    win_historico = ctk.CTkToplevel(janela)
+    win_historico.title("Histórico de Pedidos e Recibos")
+    win_historico.geometry("1150x480")
+
+    win_historico.lift()
+    win_historico.focus_force()
 
     tabela = ttk.Treeview(
-        tela,
-        columns=("id", "cliente", "detalhes", "subtotal", "entrega", "total", "data", "rastreio", "pagamento", "status"),
+        win_historico,
+        columns=("id", "cliente", "telefone", "total", "pagamento", "banco", "data", "status"),
         show="headings"
     )
-
-    colunas = {
-        "id": "ID", "cliente": "Cliente", "detalhes": "Itens", "subtotal": "Subtotal",
-        "entrega": "Frete", "total": "Total", "data": "Data", "rastreio": "Rastreio",
-        "pagamento": "Pagamento", "status": "Status"
+    colunas_hist = {
+        "id": "ID", 
+        "cliente": "Cliente", 
+        "telefone": "Telefone", 
+        "total": "Total", 
+        "pagamento": "Pgto", 
+        "banco": "Banco",
+        "data": "Data",
+        "status": "Status"
     }
+    
+    for c, t in colunas_hist.items():
+        tabela.heading(c, text=t)
+        tabela.column(c, width=110 if c in ["cliente", "data"] else 80)
+        
+    tabela.pack(fill="both", expand=True, padx=10, pady=10)
 
-    for col, tit in colunas.items():
-        tabela.heading(col, text=tit)
+    def carregar_pedidos():
+        for row in tabela.get_children():
+            tabela.delete(row)
+        cursor.execute("SELECT id, cliente, telefone, total, pagamento, banco, data, status FROM pedidos ORDER BY id DESC")
+        for p in cursor.fetchall():
+            tabela.insert("", "end", values=(p[0], p[1], p[2], f"R$ {p[3]:.2f}", p[4], p[5], p[6], p[7]))
 
-    tabela.column("id", width=30)
-    tabela.column("cliente", width=110)
-    tabela.column("detalhes", width=220)
-    tabela.column("subtotal", width=65)
-    tabela.column("entrega", width=55)
-    tabela.column("total", width=65)
-    tabela.column("data", width=100)
-    tabela.column("rastreio", width=90)
-    tabela.column("pagamento", width=90)
-    tabela.column("status", width=85)
+    carregar_pedidos()
 
-    tabela.pack(fill="both", expand=True, padx=8, pady=8)
+    def ver_detalhes_pedido():
+        sel = tabela.selection()
+        if not sel:
+            messagebox.showwarning("Aviso", "Selecione um pedido na lista.")
+            return
+        pedido_id = tabela.item(sel[0])["values"][0]
+        
+        cursor.execute("SELECT * FROM pedidos WHERE id = ?", (pedido_id,))
+        p = cursor.fetchone()
+        
+        if p:
+            info = f"""
+📄 RECIBO DE PEDIDO #{p[0]}
+----------------------------------------
+Cliente: {p[1]}
+CPF: {p[3]}
+Telefone: {p[2]}
+Endereço: {p[4]} ({p[5]})
+----------------------------------------
+Itens: {p[7]}
+Observações: {p[6]}
+----------------------------------------
+Subtotal: R$ {p[8]:.2f}
+Desconto: R$ {p[9]:.2f}
+Frete: R$ {p[10]:.2f}
+TOTAL: R$ {p[11]:.2f}
+----------------------------------------
+Forma de Pgto: {p[15]}
+Banco: {p[16]}
+Brinde: {p[17]}
+Rastreio: {p[14]} | Previsão: {p[13]}
+Status: {p[18]}
+            """
+            top_recibo = ctk.CTkToplevel(win_historico)
+            top_recibo.title(f"Recibo #{pedido_id}")
+            top_recibo.geometry("450x550")
+            top_recibo.lift()
+            top_recibo.focus_force()
+            
+            txt = ctk.CTkTextbox(top_recibo, font=ctk.CTkFont(family="Consolas", size=12))
+            txt.pack(fill="both", expand=True, padx=10, pady=10)
+            txt.insert("1.0", info)
 
-    cursor.execute("""
-        SELECT id, cliente, detalhes, subtotal, taxa_entrega, total, data, rastreio, pagamento, status
-        FROM pedidos ORDER BY id DESC
-    """)
+    btn_frame = ctk.CTkFrame(win_historico, fg_color="transparent")
+    btn_frame.pack(fill="x", padx=10, pady=(0, 10))
 
-    for p in cursor.fetchall():
-        tabela.insert("", "end", values=(
-            p[0], p[1], p[2],
-            f"R$ {p[3]:.2f}", f"R$ {p[4]:.2f}", f"R$ {p[5]:.2f}",
-            p[6], p[7], p[8], p[9]
-        ))
+    ctk.CTkButton(btn_frame, text="🔍 Ver Detalhes / Recibo", fg_color="#2979FF", command=ver_detalhes_pedido).pack(side="left", padx=5)
 
+ctk.CTkButton(frame_botoes_gestao, text="📦 Estoque (Admin)", fg_color="#2979FF", hover_color="#1565C0", font=ctk.CTkFont(weight="bold"), height=28, command=abrir_painel_admin).pack(side="left", fill="x", expand=True, padx=(0, 2))
+ctk.CTkButton(frame_botoes_gestao, text="📋 Histórico", fg_color="#651FFF", hover_color="#4527A0", font=ctk.CTkFont(weight="bold"), height=28, command=mostrar_historico).pack(side="left", fill="x", expand=True, padx=(2, 0))
 
-def fechar_programa():
-    conexao.close()
-    janela.destroy()
-
-
-# =====================================================
-# LAYOUT DA INTERFACE (COMPACTO E COMPLETO)
-# =====================================================
-
-lado_esquerdo = tk.Frame(janela, bg="white", padx=10, pady=10)
-lado_esquerdo.pack(side="left", fill="both", expand=True)
-
-lado_direito = tk.Frame(janela, bg="#c62828", padx=10, pady=10)
-lado_direito.pack(side="right", fill="both", expand=True)
-
-# Título da Loja
-tk.Label(lado_esquerdo, text=NOME_LOJA, font=("Arial", 16, "bold"), bg="white", fg="#b71c1c").pack(anchor="w")
-tk.Label(lado_esquerdo, text="Entrega Fixa: R$ 10,00", font=("Arial", 9), bg="white", fg="#555").pack(anchor="w", pady=(0, 5))
-
-# Lista de Times
-frame_times = tk.LabelFrame(lado_esquerdo, text="Escolha o Time", bg="white", padx=5, pady=5)
-frame_times.pack(fill="both", expand=True)
-
-canvas_times = tk.Canvas(frame_times, bg="white", highlightthickness=0)
-barra_times = ttk.Scrollbar(frame_times, orient="vertical", command=canvas_times.yview)
-lista_times = tk.Frame(canvas_times, bg="white")
-
-lista_times.bind("<Configure>", lambda e: canvas_times.configure(scrollregion=canvas_times.bbox("all")))
-canvas_times.create_window((0, 0), window=lista_times, anchor="nw")
-canvas_times.configure(yscrollcommand=barra_times.set)
-
-canvas_times.pack(side="left", fill="both", expand=True)
-barra_times.pack(side="right", fill="y")
-
-for numero, time in enumerate(times, start=1):
-    linha = tk.Frame(lista_times, bg="white", relief="solid", borderwidth=1)
-    linha.pack(fill="x", padx=3, pady=2)
-
-    escudo_widget = obter_escudo_widget(linha, time)
-    escudo_widget.pack(side="left", padx=4, pady=2)
-
-    info_text = f"{time} — R$ {times_dados[time]['preco']:.2f}".replace(".", ",")
-    tk.Label(linha, text=info_text, font=("Arial", 9, "bold"), bg="white", anchor="w").pack(side="left", fill="x", expand=True, padx=4)
-
-    btn = tk.Button(linha, text="Selecionar", font=("Arial", 8), bg="#b71c1c", fg="white", command=lambda t=time: selecionar_time(t))
-    btn.pack(side="right", padx=5, pady=2)
-
-    botoes_times_dados.append((btn, time))
-
-label_selecionado = tk.Label(lado_esquerdo, text="Time selecionado: nenhum", font=("Arial", 10, "bold"), bg="white", fg="#2e7d32")
-label_selecionado.pack(anchor="w", pady=4)
-
-# Opções do Produto
-frame_opcoes = tk.LabelFrame(lado_esquerdo, text="Opções da Camisa", bg="white", padx=6, pady=6)
-frame_opcoes.pack(fill="x", pady=4)
-
-linha_tam_qtd = tk.Frame(frame_opcoes, bg="white")
-linha_tam_qtd.pack(fill="x")
-
-tk.Label(linha_tam_qtd, text="Tamanho:", bg="white", font=("Arial", 9)).pack(side="left")
-combo_tamanho = ttk.Combobox(linha_tam_qtd, values=["PP", "P", "M", "G", "GG", "XG"], state="readonly", width=4)
-combo_tamanho.set("M")
-combo_tamanho.pack(side="left", padx=4)
-
-tk.Label(linha_tam_qtd, text="Qtd:", bg="white", font=("Arial", 9)).pack(side="left", padx=(8, 0))
-campo_quantidade = tk.Entry(linha_tam_qtd, width=4)
-campo_quantidade.insert(0, "1")
-campo_quantidade.pack(side="left", padx=4)
-
-var_personalizar = tk.BooleanVar(value=False)
-tk.Checkbutton(frame_opcoes, text="Personalizar (+R$ 20,00)", variable=var_personalizar, command=ativar_personalizacao, bg="white", font=("Arial", 9)).pack(anchor="w", pady=2)
-
-linha_pers = tk.Frame(frame_opcoes, bg="white")
-linha_pers.pack(fill="x")
-
-tk.Label(linha_pers, text="Nome:", bg="white", font=("Arial", 9)).pack(side="left")
-campo_nome = tk.Entry(linha_pers, width=12, state="disabled")
-campo_nome.pack(side="left", padx=3)
-
-tk.Label(linha_pers, text="N°:", bg="white", font=("Arial", 9)).pack(side="left", padx=(4, 0))
-campo_numero = tk.Entry(linha_pers, width=4, state="disabled")
-campo_numero.pack(side="left", padx=3)
-
-tk.Button(lado_esquerdo, text="Adicionar ao Carrinho", command=adicionar_carrinho, bg="#b71c1c", fg="white", font=("Arial", 10, "bold")).pack(fill="x", pady=6)
-
-
-# Carrinho Lado Direito
-tk.Label(lado_direito, text="CARRINHO DE COMPRAS", font=("Arial", 14, "bold"), bg="#c62828", fg="white").pack(anchor="w")
-
-frame_carrinho = tk.LabelFrame(lado_direito, text="Itens Selecionados", bg="#c62828", fg="white", padx=5, pady=5)
-frame_carrinho.pack(fill="both", expand=True, pady=4)
-
-lista_carrinho = ttk.Treeview(
-    frame_carrinho,
-    columns=("produto", "tamanho", "personalizado", "quantidade", "subtotal"),
-    show="headings",
-    height=8
-)
-
-cols = {"produto": "Produto", "tamanho": "Tam.", "personalizado": "Pers.", "quantidade": "Qtd.", "subtotal": "Subtotal"}
-for c, t in cols.items():
-    lista_carrinho.heading(c, text=t)
-
-lista_carrinho.column("produto", width=120)
-lista_carrinho.column("tamanho", width=40)
-lista_carrinho.column("personalizado", width=40)
-lista_carrinho.column("quantidade", width=40)
-lista_carrinho.column("subtotal", width=65)
-
-lista_carrinho.pack(fill="both", expand=True)
-
-tk.Button(frame_carrinho, text="Remover Item Selecionado", command=remover_item, bg="#8e0000", fg="white", font=("Arial", 8)).pack(pady=3)
-
-# Totais
-label_subtotal = tk.Label(lado_direito, text="Subtotal: R$ 0,00", font=("Arial", 10), bg="#c62828", fg="white")
-label_subtotal.pack(anchor="e")
-
-label_entrega = tk.Label(lado_direito, text="Taxa de Entrega: R$ 0,00", font=("Arial", 10), bg="#c62828", fg="white")
-label_entrega.pack(anchor="e")
-
-label_total = tk.Label(lado_direito, text="TOTAL: R$ 0,00", font=("Arial", 13, "bold"), bg="#c62828", fg="white")
-label_total.pack(anchor="e", pady=(2, 4))
-
-
-# Dados do Pedido
-frame_cliente = tk.LabelFrame(lado_direito, text="Dados do Cliente", bg="#c62828", fg="white", padx=6, pady=6)
-frame_cliente.pack(fill="x")
-
-tk.Label(frame_cliente, text="Nome do Cliente:", bg="#c62828", fg="white", font=("Arial", 9)).pack(anchor="w")
-campo_cliente = tk.Entry(frame_cliente)
-campo_cliente.pack(fill="x", pady=2)
-
-tk.Button(frame_cliente, text="Gerar Nome Automático (Faker)", command=gerar_cliente, bg="#6a1b9a", fg="white", font=("Arial", 8)).pack(fill="x", pady=2)
-
-tk.Label(frame_cliente, text="Forma de Pagamento:", bg="#c62828", fg="white", font=("Arial", 9)).pack(anchor="w", pady=(4, 1))
-combo_pagamento = ttk.Combobox(frame_cliente, values=["Pix", "Cartão de Crédito", "Cartão de Débito", "Dinheiro"], state="readonly")
-combo_pagamento.pack(fill="x")
-
-tk.Button(lado_direito, text="FINALIZAR PEDIDO DE LOJA", command=finalizar_pedido, bg="#2e7d32", fg="white", font=("Arial", 11, "bold")).pack(fill="x", pady=6)
-tk.Button(lado_direito, text="Ver Histórico de Pedidos", command=mostrar_historico, bg="#333", fg="white", font=("Arial", 9)).pack(fill="x")
-
-janela.protocol("WM_DELETE_WINDOW", fechar_programa)
+# Inicialização do loop principal
 janela.mainloop()
