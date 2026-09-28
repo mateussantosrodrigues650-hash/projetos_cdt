@@ -2,6 +2,7 @@ import json
 import os
 import random
 import sqlite3
+import hashlib
 from datetime import datetime, timedelta
 from tkinter import messagebox, ttk
 import customtkinter as ctk
@@ -26,6 +27,8 @@ BANCO_DB = "loja_camisas.db"
 ARQUIVO_CONFIG = "configuracao.json"
 PRECO_PERSONALIZACAO = 20.00
 ARQUIVO_USUARIOS = "usuarios.json"
+ADMIN_USUARIO = "admin"
+ADMIN_SENHA_HASH = hashlib.sha256("1234".encode("utf-8")).hexdigest()
 
 TIMES_CATALOGO_BASE = {
     "Athletico-PR": {
@@ -268,6 +271,21 @@ class DatabaseManager:
         )
         return self.cursor.fetchall()
 
+    def atualizar_estoque(self, prod_id, tamanho, nova_qtd):
+        coluna = f"estoque_{tamanho.lower()}"
+        if coluna not in {"estoque_pp", "estoque_p", "estoque_m", "estoque_g", "estoque_gg", "estoque_xg"}:
+            raise ValueError("Tamanho inválido")
+        with self.conexao:
+            self.cursor.execute(f"UPDATE produtos SET {coluna} = ? WHERE id = ?", (nova_qtd, prod_id))
+
+    def atualizar_status_pedido(self, pedido_id, novo_status):
+        with self.conexao:
+            self.cursor.execute("UPDATE pedidos SET status = ? WHERE id = ?", (novo_status, pedido_id))
+
+    def rastreio_existe(self, rastreio):
+        self.cursor.execute("SELECT 1 FROM pedidos WHERE rastreio = ? LIMIT 1", (rastreio,))
+        return self.cursor.fetchone() is not None
+
     def salvar_avaliacao(self, cliente, nota, comentario):
         with self.conexao:
             self.cursor.execute(
@@ -288,6 +306,42 @@ class DatabaseManager:
             "SELECT cliente, nota, comentario, data FROM avaliacoes ORDER BY id DESC"
         )
         return self.cursor.fetchall()
+
+    def buscar_pedido_por_rastreio(self, rastreio):
+        self.cursor.execute(
+            "SELECT id, cliente, total, data, previsao, rastreio, status, detalhes FROM pedidos WHERE rastreio = ? LIMIT 1",
+            (rastreio.strip().upper(),),
+        )
+        return self.cursor.fetchone()
+
+    def estatisticas_pedidos(self):
+        self.cursor.execute("SELECT COUNT(*), COALESCE(SUM(total), 0) FROM pedidos")
+        pedidos, faturamento = self.cursor.fetchone()
+        # A quantidade vendida é calculada a partir dos detalhes dos pedidos.
+        self.cursor.execute("SELECT detalhes FROM pedidos")
+        total_itens = 0
+        for (detalhes,) in self.cursor.fetchall():
+            for parte in (detalhes or "").split(" | "):
+                try:
+                    total_itens += int(parte.split("x", 1)[0])
+                except (ValueError, IndexError):
+                    pass
+        self.cursor.execute("SELECT AVG(nota) FROM avaliacoes")
+        media = self.cursor.fetchone()[0] or 0
+        return pedidos, faturamento, total_itens, media
+
+    def produtos_estoque_baixo(self, limite=5):
+        self.cursor.execute(
+            "SELECT nome, estoque_pp, estoque_p, estoque_m, estoque_g, estoque_gg, estoque_xg FROM produtos"
+        )
+        baixos = []
+        for row in self.cursor.fetchall():
+            nome = row[0]
+            estoques = dict(zip(["PP", "P", "M", "G", "GG", "XG"], row[1:]))
+            for tam, qtd in estoques.items():
+                if qtd <= limite:
+                    baixos.append((nome, tam, qtd))
+        return baixos
 
 
 # Instância do Gerenciador de Banco de Dados
@@ -314,6 +368,8 @@ class NacaoDosMantosApp(ctk.CTk):
 
         self.win_admin = None
         self.win_historico = None
+        self.usuario_logado = ""
+        self.is_admin = False
 
         self.withdraw()
         self.abrir_login()
@@ -445,9 +501,15 @@ class NacaoDosMantosApp(ctk.CTk):
         u = self.login_user.get().strip()
         p = self.login_pass.get().strip()
 
-        if (u == "admin" and p == "1234") or (
-            u in usuarios and usuarios[u]["senha"] == p
+        senha_hash = hashlib.sha256(p.encode("utf-8")).hexdigest()
+        senha_usuario = usuarios.get(u, {}).get("senha", "")
+        senha_valida = senha_usuario == p or senha_usuario == senha_hash
+
+        if (u == ADMIN_USUARIO and senha_hash == ADMIN_SENHA_HASH) or (
+            u in usuarios and senha_valida
         ):
+            self.usuario_logado = u
+            self.is_admin = u == ADMIN_USUARIO
             self.login.destroy()
             self.deiconify()
         else:
@@ -462,7 +524,10 @@ class NacaoDosMantosApp(ctk.CTk):
             messagebox.showwarning("Aviso", "Digite usuário e senha")
             return
         usuarios = self.carregar_usuarios()
-        usuarios[u] = {"senha": p, "nome": u}
+        if u == ADMIN_USUARIO:
+            messagebox.showwarning("Aviso", "Esse usuário é reservado para o administrador.")
+            return
+        usuarios[u] = {"senha": hashlib.sha256(p.encode("utf-8")).hexdigest(), "nome": u}
         self.salvar_usuarios(usuarios)
         messagebox.showinfo("Sucesso", "Conta criada com sucesso!")
 
@@ -489,6 +554,35 @@ class NacaoDosMantosApp(ctk.CTk):
         messagebox.showinfo(
             "Conta Faker criada", f"Usuário: {usuario}\nSenha: {senha}"
         )
+
+    def gerar_dados_compra_fake(self):
+        if not fake:
+            messagebox.showwarning("Faker não instalado", "Instale com: pip install faker")
+            return
+
+        dados = {
+            "nome": fake.name(),
+            "telefone": fake.phone_number(),
+            "cpf": fake.cpf(),
+            "endereco": fake.address().replace("\n", ", "),
+        }
+        self.campo_cliente.delete(0, "end")
+        self.campo_cliente.insert(0, dados["nome"])
+        self.campo_tel.delete(0, "end")
+        self.campo_tel.insert(0, dados["telefone"])
+        self.campo_cpf.delete(0, "end")
+        self.campo_cpf.insert(0, dados["cpf"])
+        self.campo_endereco.delete(0, "end")
+        self.campo_endereco.insert(0, dados["endereco"])
+        messagebox.showinfo("Faker gerado 🎲", "Dados de teste preenchidos com sucesso!")
+
+    def limpar_carrinho(self):
+        if not self.carrinho:
+            return
+        if messagebox.askyesno("Limpar carrinho", "Deseja remover todos os itens do carrinho?"):
+            self.carrinho.clear()
+            self.atualizar_tabela_carrinho()
+            self.atualizar_total()
 
     def configurar_grid(self):
         self.grid_columnconfigure(0, weight=6)
@@ -852,15 +946,28 @@ class NacaoDosMantosApp(ctk.CTk):
         self.lista_carrinho.column("subtotal", width=65)
         self.lista_carrinho.pack(fill="both", expand=True)
 
+        frame_carrinho_acoes = ctk.CTkFrame(self.frame_direito, fg_color="transparent")
+        frame_carrinho_acoes.pack(fill="x", padx=15, pady=2)
+
         ctk.CTkButton(
-            self.frame_direito,
+            frame_carrinho_acoes,
             text="✖ Remover Item",
             fg_color="#FF1744",
             hover_color="#D50000",
             font=ctk.CTkFont(weight="bold"),
             height=24,
             command=self.remover_item,
-        ).pack(anchor="e", padx=15, pady=2)
+        ).pack(side="right", padx=2)
+
+        ctk.CTkButton(
+            frame_carrinho_acoes,
+            text="🗑️ Limpar Carrinho",
+            fg_color="#B71C1C",
+            hover_color="#8E0000",
+            font=ctk.CTkFont(weight="bold"),
+            height=24,
+            command=self.limpar_carrinho,
+        ).pack(side="right", padx=2)
 
         frame_cupom = ctk.CTkFrame(self.frame_direito, fg_color="transparent")
         frame_cupom.pack(fill="x", padx=15, pady=2)
@@ -941,6 +1048,16 @@ class NacaoDosMantosApp(ctk.CTk):
             height=28,
         )
         self.campo_endereco.pack(fill="x", padx=8, pady=2)
+
+        ctk.CTkButton(
+            frame_cliente,
+            text="🎲 GERAR DADOS FAKER",
+            fg_color="#651FFF",
+            hover_color="#4527A0",
+            font=ctk.CTkFont(weight="bold"),
+            height=27,
+            command=self.gerar_dados_compra_fake,
+        ).pack(fill="x", padx=8, pady=(1, 3))
 
         box_frete = ctk.CTkFrame(frame_cliente, fg_color="transparent")
         box_frete.pack(fill="x", padx=8, pady=2)
@@ -1029,6 +1146,16 @@ class NacaoDosMantosApp(ctk.CTk):
 
         ctk.CTkButton(
             box_extras,
+            text="📦 Rastrear",
+            fg_color="#00ACC1",
+            hover_color="#00838F",
+            font=ctk.CTkFont(weight="bold"),
+            width=110,
+            command=self.abrir_rastreio,
+        ).pack(side="left", expand=True, padx=2)
+
+        ctk.CTkButton(
+            box_extras,
             text="⭐ Avaliar",
             fg_color="#FFD700",
             hover_color="#FFC107",
@@ -1096,7 +1223,31 @@ class NacaoDosMantosApp(ctk.CTk):
             "subtotal": subtotal_item,
         }
 
-        self.carrinho.append(item)
+        # Agrupa itens iguais para deixar o carrinho mais organizado.
+        item_existente = next(
+            (x for x in self.carrinho
+             if x["produto"] == item["produto"]
+             and x["tamanho"] == item["tamanho"]
+             and x["personalizado"] == item["personalizado"]
+             and x["brinde"] == item["brinde"]),
+            None,
+        )
+        if item_existente:
+            nova_qtd = item_existente["quantidade"] + qtd
+            if nova_qtd > res[0]:
+                messagebox.showerror("Erro", f"A quantidade total ultrapassa o estoque do tamanho {tam}!")
+                return
+            item_existente["quantidade"] = nova_qtd
+            item_existente["subtotal"] = (preco_base + adicional_pers) * nova_qtd
+        else:
+            self.carrinho.append(item)
+
+        self.campo_quantidade.delete(0, "end")
+        self.campo_quantidade.insert(0, "1")
+        self.campo_nome.delete(0, "end")
+        self.campo_numero.delete(0, "end")
+        self.var_personalizar.set(False)
+        self.ativar_personalizacao()
         self.atualizar_tabela_carrinho()
         self.atualizar_total()
 
@@ -1174,9 +1325,30 @@ class NacaoDosMantosApp(ctk.CTk):
         cpf = self.campo_cpf.get().strip()
         endereco = self.campo_endereco.get().strip()
 
-        if not cliente or not tel or not endereco:
-            messagebox.showwarning("Aviso", "Preencha Nome, WhatsApp e Endereço!")
+        cpf_numeros = "".join(ch for ch in cpf if ch.isdigit())
+        tel_numeros = "".join(ch for ch in tel if ch.isdigit())
+
+        if not cliente or not tel or not cpf or not endereco:
+            messagebox.showwarning("Aviso", "Preencha Nome, WhatsApp, CPF e Endereço!")
             return
+        if len(cpf_numeros) != 11:
+            messagebox.showwarning("CPF inválido", "Digite um CPF com 11 números.")
+            return
+        if len(tel_numeros) < 10:
+            messagebox.showwarning("Telefone inválido", "Digite um telefone válido.")
+            return
+
+        # Confere novamente o estoque antes de concluir a venda.
+        for i in self.carrinho:
+            coluna_est = f"estoque_{i['tamanho'].lower()}"
+            res_estoque = db.obter_produto_estoque(i["produto"], coluna_est)
+            if not res_estoque or res_estoque[0] < i["quantidade"]:
+                messagebox.showerror(
+                    "Estoque alterado",
+                    f"O estoque de {i['produto']} ({i['tamanho']}) mudou. Revise o carrinho.",
+                )
+                self.construir_catalogo()
+                return
 
         subtotal = sum(i["subtotal"] for i in self.carrinho)
         val_desconto = subtotal * self.desconto_aplicado
@@ -1185,8 +1357,12 @@ class NacaoDosMantosApp(ctk.CTk):
 
         dt_atual = datetime.now()
         data_str = dt_atual.strftime("%Y-%m-%d %H:%M")
-        previsao_str = ""
+        previsao = dt_atual + timedelta(days=4)
+        previsao_str = previsao.strftime("%d/%m/%Y")
+
         rastreio = f"NM{random.randint(100000, 999999)}BR"
+        while db.rastreio_existe(rastreio):
+            rastreio = f"NM{random.randint(100000, 999999)}BR"
 
         detalhes_lista = []
         for i in self.carrinho:
@@ -1225,6 +1401,7 @@ class NacaoDosMantosApp(ctk.CTk):
             "Pedido Realizado! 🏆",
             f"Obrigado, {cliente}!\n\n"
             f"📦 Código de Rastreio: {rastreio}\n"
+            f"📅 Previsão de entrega: {previsao_str}\n"
             f"💰 Total: R$ {total:.2f}\n\n"
         )
 
@@ -1236,9 +1413,63 @@ class NacaoDosMantosApp(ctk.CTk):
         self.campo_cpf.delete(0, "end")
         self.campo_endereco.delete(0, "end")
         self.campo_obs.delete(0, "end")
+        self.campo_cupom.delete(0, "end")
+        self.desconto_aplicado = 0.0
+        self.cupom_ativo = ""
         self.construir_catalogo()
 
     # --- JANELAS SECUNDÁRIAS ---
+    def abrir_rastreio(self):
+        win = ctk.CTkToplevel(self)
+        win.title("📦 Rastrear Pedido")
+        win.geometry("620x500")
+        win.resizable(False, False)
+        win.grab_set()
+
+        ctk.CTkLabel(
+            win, text="📦 ACOMPANHE SEU PEDIDO",
+            font=ctk.CTkFont(size=24, weight="bold"),
+            text_color="#FFD700",
+        ).pack(pady=(28, 8))
+        ctk.CTkLabel(
+            win, text="Digite o código de rastreio recebido após a compra.",
+            font=ctk.CTkFont(size=14),
+        ).pack(pady=(0, 15))
+
+        entrada = ctk.CTkEntry(win, placeholder_text="Ex.: NM123456BR", width=360, height=44, font=ctk.CTkFont(size=15))
+        entrada.pack(pady=5)
+        resultado = ctk.CTkTextbox(win, width=540, height=260, font=ctk.CTkFont(size=14))
+        resultado.pack(padx=20, pady=18, fill="both", expand=True)
+        resultado.configure(state="disabled")
+
+        def mostrar():
+            pedido = db.buscar_pedido_por_rastreio(entrada.get())
+            resultado.configure(state="normal")
+            resultado.delete("1.0", "end")
+            if not pedido:
+                resultado.insert("end", "❌ Pedido não encontrado.\n\nConfira o código e tente novamente.")
+            else:
+                pid, cliente, total, data, previsao, rastreio, status, detalhes = pedido
+                resultado.insert(
+                    "end",
+                    f"⚽ PEDIDO #{pid}\n\n"
+                    f"👤 Cliente: {cliente}\n"
+                    f"📅 Pedido: {data}\n"
+                    f"📦 Rastreio: {rastreio}\n"
+                    f"🚚 Status: {status}\n"
+                    f"📅 Previsão: {previsao}\n"
+                    f"💰 Total: R$ {total:.2f}\n\n"
+                    f"🛍️ Itens: {detalhes}"
+                )
+            resultado.configure(state="disabled")
+
+        ctk.CTkButton(
+            win, text="🔎 CONSULTAR PEDIDO", width=360, height=44,
+            fg_color="#00ACC1", hover_color="#00838F",
+            font=ctk.CTkFont(weight="bold"), command=mostrar,
+        ).pack(pady=(0, 18))
+        entrada.bind("<Return>", lambda e: mostrar())
+
     def abrir_historico(self):
         if self.win_historico and self.win_historico.winfo_exists():
             self.win_historico.focus()
@@ -1273,67 +1504,245 @@ class NacaoDosMantosApp(ctk.CTk):
         for p in db.listar_pedidos_resumidos():
             tree.insert("", "end", values=p)
 
+        def mostrar_detalhes(event=None):
+            sel = tree.selection()
+            if not sel:
+                return
+            pedido_id = tree.item(sel[0])["values"][0]
+            dados = db.obter_detalhes_pedido(pedido_id)
+            if not dados:
+                return
+            (pid, cliente, telefone, cpf, endereco, regiao, obs, detalhes,
+             subtotal, desconto, entrega, total, data, previsao, rastreio,
+             pagamento, banco, brinde, status) = dados
+
+            detalhes_win = ctk.CTkToplevel(self.win_historico)
+            detalhes_win.title(f"📦 Pedido #{pid}")
+            detalhes_win.geometry("620x520")
+            detalhes_win.grab_set()
+
+            texto = (
+                f"PEDIDO #{pid}\n\n"
+                f"👤 Cliente: {cliente}\n"
+                f"📱 Telefone: {telefone}\n"
+                f"🧾 CPF: {cpf}\n"
+                f"📍 Endereço: {endereco}\n"
+                f"🚚 Região: {regiao}\n\n"
+                f"🛒 Itens: {detalhes}\n\n"
+                f"💵 Subtotal: R$ {subtotal:.2f}\n"
+                f"🏷️ Desconto: R$ {desconto:.2f}\n"
+                f"🚚 Entrega: R$ {entrega:.2f}\n"
+                f"💰 TOTAL: R$ {total:.2f}\n\n"
+                f"📅 Pedido: {data}\n"
+                f"📅 Previsão: {previsao}\n"
+                f"📦 Rastreio: {rastreio}\n"
+                f"💳 Pagamento: {pagamento} / {banco}\n"
+                f"🎁 Brinde: {brinde}\n"
+                f"📌 Status: {status}\n"
+                f"📝 Observações: {obs or 'Nenhuma'}"
+            )
+            ctk.CTkTextbox(detalhes_win, width=570, height=420).pack(padx=20, pady=20, fill="both", expand=True)
+            caixa = detalhes_win.winfo_children()[0]
+            caixa.insert("1.0", texto)
+            caixa.configure(state="disabled")
+
+        tree.bind("<Double-1>", mostrar_detalhes)
+
     def abrir_avaliacao(self):
         win_av = ctk.CTkToplevel(self)
         win_av.title("⭐ Deixar Avaliação")
-        win_av.geometry("400x320")
+        win_av.geometry("700x520")
         win_av.grab_set()
 
-        ctk.CTkLabel(win_av, text="Sua Avaliação é muito importante!", font=ctk.CTkFont(weight="bold")).pack(pady=10)
+        ctk.CTkLabel(
+            win_av,
+            text="Sua Avaliação é muito importante!",
+            font=ctk.CTkFont(size=22, weight="bold"),
+        ).pack(pady=(25, 18))
 
-        c_nome = ctk.CTkEntry(win_av, placeholder_text="Seu Nome", width=250)
-        c_nome.pack(pady=5)
+        c_nome = ctk.CTkEntry(
+            win_av, placeholder_text="Seu Nome", width=500, height=48,
+            font=ctk.CTkFont(size=16)
+        )
+        c_nome.pack(pady=8)
 
-        c_nota = ctk.CTkComboBox(win_av, values=["5 - Excelente", "4 - Muito Bom", "3 - Bom", "2 - Regular", "1 - Ruim"], width=250)
-        c_nota.pack(pady=5)
+        c_nota = ctk.CTkComboBox(
+            win_av,
+            values=["5 - Excelente", "4 - Muito Bom", "3 - Bom", "2 - Regular", "1 - Ruim"],
+            width=500, height=48,
+            font=ctk.CTkFont(size=16),
+        )
+        c_nota.pack(pady=8)
 
-        c_coment = ctk.CTkEntry(win_av, placeholder_text="Comentário", width=250, height=60)
-        c_coment.pack(pady=5)
+        c_coment = ctk.CTkEntry(
+            win_av, placeholder_text="Comentário", width=500, height=70,
+            font=ctk.CTkFont(size=16)
+        )
+        c_coment.pack(pady=8)
 
         def salvar():
             nome = c_nome.get().strip()
-            nota = int(c_nota.get().split(" ")[0])
+            try:
+                nota = int(c_nota.get().split(" ")[0])
+            except (ValueError, IndexError):
+                nota = 5
             coment = c_coment.get().strip()
             if nome and coment:
                 db.salvar_avaliacao(nome, nota, coment)
-                messagebox.showinfo("Obrigado!", "Avaliação salva com sucesso!")
                 win_av.destroy()
+                mostrar_obrigado()
             else:
                 messagebox.showwarning("Aviso", "Preencha todos os campos.")
 
-        ctk.CTkButton(win_av, text="Enviar Avaliação", fg_color="#00E676", text_color="#000", command=salvar).pack(pady=10)
+        def mostrar_obrigado():
+            obrigado = ctk.CTkToplevel(self)
+            obrigado.title("💚 Obrigado!")
+            obrigado.geometry("650x420")
+            obrigado.resizable(False, False)
+            obrigado.grab_set()
+
+            ctk.CTkLabel(
+                obrigado,
+                text="⚽",
+                font=ctk.CTkFont(size=78),
+            ).pack(pady=(35, 0))
+
+            ctk.CTkLabel(
+                obrigado,
+                text="😊",
+                font=ctk.CTkFont(size=58),
+            ).pack(pady=(0, 5))
+
+            ctk.CTkLabel(
+                obrigado,
+                text="Obrigado por avaliar!",
+                font=ctk.CTkFont(size=28, weight="bold"),
+            ).pack(pady=5)
+
+            ctk.CTkLabel(
+                obrigado,
+                text="Sua opinião ajuda a Nação dos Mantos a melhorar cada vez mais!",
+                font=ctk.CTkFont(size=15),
+                text_color="#BDBDBD",
+            ).pack(pady=5)
+
+            ctk.CTkButton(
+                obrigado,
+                text="⚽ Fechar",
+                width=220,
+                height=48,
+                fg_color="#00C853",
+                hover_color="#00A844",
+                text_color="#000000",
+                font=ctk.CTkFont(size=16, weight="bold"),
+                command=obrigado.destroy,
+            ).pack(pady=(22, 20))
+
+        ctk.CTkButton(
+            win_av, text="Enviar Avaliação", fg_color="#00E676", text_color="#000",
+            width=220, height=48, font=ctk.CTkFont(size=16, weight="bold"),
+            command=salvar
+        ).pack(pady=(15, 20))
+
+    def pedir_login_admin(self):
+        """Permite entrar no painel administrativo sem precisar sair da conta atual."""
+        if hasattr(self, "win_login_admin") and self.win_login_admin and self.win_login_admin.winfo_exists():
+            self.win_login_admin.focus()
+            return
+
+        self.win_login_admin = ctk.CTkToplevel(self)
+        self.win_login_admin.title("🔐 Acesso do Administrador")
+        self.win_login_admin.geometry("460x330")
+        self.win_login_admin.resizable(False, False)
+        self.win_login_admin.grab_set()
+
+        ctk.CTkLabel(
+            self.win_login_admin,
+            text="🔐 Painel do Administrador",
+            font=ctk.CTkFont(size=22, weight="bold"),
+        ).pack(pady=(30, 20))
+
+        usuario = ctk.CTkEntry(
+            self.win_login_admin,
+            placeholder_text="Usuário do administrador",
+            width=340, height=44,
+            font=ctk.CTkFont(size=15),
+        )
+        usuario.pack(pady=8)
+        usuario.insert(0, ADMIN_USUARIO)
+
+        senha = ctk.CTkEntry(
+            self.win_login_admin,
+            placeholder_text="Senha do administrador",
+            show="*",
+            width=340, height=44,
+            font=ctk.CTkFont(size=15),
+        )
+        senha.pack(pady=8)
+
+        mensagem = ctk.CTkLabel(
+            self.win_login_admin, text="", text_color="#FF5252",
+            font=ctk.CTkFont(size=12),
+        )
+        mensagem.pack(pady=2)
+
+        def entrar_admin():
+            senha_hash = hashlib.sha256(senha.get().strip().encode("utf-8")).hexdigest()
+            if usuario.get().strip() == ADMIN_USUARIO and senha_hash == ADMIN_SENHA_HASH:
+                self.is_admin = True
+                self.usuario_logado = ADMIN_USUARIO
+                self.win_login_admin.destroy()
+                self.abrir_admin()
+            else:
+                mensagem.configure(text="Usuário ou senha de administrador incorretos!")
+                senha.delete(0, "end")
+
+        ctk.CTkButton(
+            self.win_login_admin,
+            text="ENTRAR NO PAINEL",
+            width=340, height=46,
+            fg_color="#651FFF",
+            hover_color="#4527A0",
+            font=ctk.CTkFont(size=14, weight="bold"),
+            command=entrar_admin,
+        ).pack(pady=(10, 5))
+
+        senha.bind("<Return>", lambda e: entrar_admin())
 
     def abrir_admin(self):
+        if not self.is_admin:
+            self.pedir_login_admin()
+            return
         if self.win_admin and self.win_admin.winfo_exists():
             self.win_admin.focus()
             return
 
         self.win_admin = ctk.CTkToplevel(self)
         self.win_admin.title("⚙️ Painel do Administrador")
-        self.win_admin.geometry("850x500")
+        self.win_admin.geometry("1050x700")
+        self.win_admin.minsize(950, 620)
         self.win_admin.grab_set()
 
+        abas = ctk.CTkTabview(self.win_admin)
+        abas.pack(fill="both", expand=True, padx=12, pady=12)
+        abas.add("📦 Estoque")
+        abas.add("🧾 Pedidos")
+        abas.add("⭐ Avaliações")
+        abas.add("📊 Resumo")
+
+        # ---------------- ESTOQUE ----------------
+        aba_estoque = abas.tab("📦 Estoque")
         tree_admin = ttk.Treeview(
-            self.win_admin,
+            aba_estoque,
             columns=("id", "nome", "preco", "pp", "p", "m", "g", "gg", "xg"),
             show="headings",
         )
-        cols = {
-            "id": "ID",
-            "nome": "Produto",
-            "preco": "Preço",
-            "pp": "PP",
-            "p": "P",
-            "m": "M",
-            "g": "G",
-            "gg": "GG",
-            "xg": "XG",
-        }
+        cols = {"id":"ID", "nome":"Produto", "preco":"Preço", "pp":"PP", "p":"P", "m":"M", "g":"G", "gg":"GG", "xg":"XG"}
         for c, t in cols.items():
             tree_admin.heading(c, text=t)
-            tree_admin.column(c, width=80)
-
-        tree_admin.pack(fill="both", expand=True, padx=10, pady=10)
+            tree_admin.column(c, width=75)
+        tree_admin.column("nome", width=230)
+        tree_admin.pack(fill="both", expand=True, padx=8, pady=8)
 
         def recarregar_admin():
             for item in tree_admin.get_children():
@@ -1342,10 +1751,8 @@ class NacaoDosMantosApp(ctk.CTk):
                 tree_admin.insert("", "end", values=prod)
 
         recarregar_admin()
-
-        box_edit = ctk.CTkFrame(self.win_admin)
-        box_edit.pack(fill="x", padx=10, pady=10)
-
+        box_edit = ctk.CTkFrame(aba_estoque)
+        box_edit.pack(fill="x", padx=8, pady=(0, 8))
         ctk.CTkLabel(box_edit, text="Novo Preço (R$):").pack(side="left", padx=5)
         e_preco = ctk.CTkEntry(box_edit, width=100)
         e_preco.pack(side="left", padx=5)
@@ -1357,6 +1764,8 @@ class NacaoDosMantosApp(ctk.CTk):
                 return
             try:
                 np = float(e_preco.get().replace(",", "."))
+                if np < 0:
+                    raise ValueError
                 p_id = tree_admin.item(sel[0])["values"][0]
                 db.atualizar_preco_produto(p_id, np)
                 recarregar_admin()
@@ -1366,6 +1775,135 @@ class NacaoDosMantosApp(ctk.CTk):
                 messagebox.showerror("Erro", "Valor inválido!")
 
         ctk.CTkButton(box_edit, text="Atualizar Preço", command=atualizar_p).pack(side="left", padx=5)
+        ctk.CTkLabel(box_edit, text="Estoque:").pack(side="left", padx=(15, 3))
+        combo_tam_admin = ctk.CTkComboBox(box_edit, values=["PP", "P", "M", "G", "GG", "XG"], width=70)
+        combo_tam_admin.set("M")
+        combo_tam_admin.pack(side="left", padx=3)
+        e_estoque = ctk.CTkEntry(box_edit, width=70, placeholder_text="Qtd")
+        e_estoque.pack(side="left", padx=3)
+
+        def atualizar_e():
+            sel = tree_admin.selection()
+            if not sel:
+                messagebox.showwarning("Aviso", "Selecione um produto.")
+                return
+            try:
+                nova_qtd = int(e_estoque.get().strip())
+                if nova_qtd < 0:
+                    raise ValueError
+                p_id = tree_admin.item(sel[0])["values"][0]
+                db.atualizar_estoque(p_id, combo_tam_admin.get(), nova_qtd)
+                recarregar_admin()
+                self.construir_catalogo()
+                messagebox.showinfo("Sucesso", "Estoque atualizado!")
+            except ValueError:
+                messagebox.showerror("Erro", "Informe uma quantidade inteira maior ou igual a zero.")
+
+        ctk.CTkButton(box_edit, text="Atualizar Estoque", command=atualizar_e).pack(side="left", padx=5)
+
+        # ---------------- PEDIDOS ----------------
+        aba_pedidos = abas.tab("🧾 Pedidos")
+        tree_pedidos = ttk.Treeview(
+            aba_pedidos,
+            columns=("id", "cliente", "tel", "total", "pagamento", "banco", "data", "status"),
+            show="headings",
+        )
+        pedidos_cols = {"id":"ID", "cliente":"Cliente", "tel":"Telefone", "total":"Total", "pagamento":"Pagamento", "banco":"Banco", "data":"Data", "status":"Status"}
+        for c,t in pedidos_cols.items():
+            tree_pedidos.heading(c, text=t)
+            tree_pedidos.column(c, width=110)
+        tree_pedidos.column("cliente", width=180)
+        tree_pedidos.pack(fill="both", expand=True, padx=8, pady=8)
+
+        def recarregar_pedidos():
+            for item in tree_pedidos.get_children():
+                tree_pedidos.delete(item)
+            for pedido in db.listar_pedidos_resumidos():
+                tree_pedidos.insert("", "end", values=pedido)
+
+        recarregar_pedidos()
+        box_status = ctk.CTkFrame(aba_pedidos)
+        box_status.pack(fill="x", padx=8, pady=(0,8))
+        ctk.CTkLabel(box_status, text="Novo status:").pack(side="left", padx=5)
+        combo_status = ctk.CTkComboBox(
+            box_status,
+            values=["Processando", "Preparando", "Enviado", "A caminho", "Entregue", "Cancelado"],
+            width=150,
+        )
+        combo_status.set("Preparando")
+        combo_status.pack(side="left", padx=5)
+
+        def atualizar_status():
+            sel = tree_pedidos.selection()
+            if not sel:
+                messagebox.showwarning("Aviso", "Selecione um pedido.")
+                return
+            pedido_id = tree_pedidos.item(sel[0])["values"][0]
+            db.atualizar_status_pedido(pedido_id, combo_status.get())
+            recarregar_pedidos()
+            messagebox.showinfo("Sucesso", "Status do pedido atualizado!")
+
+        def detalhes_pedido():
+            sel = tree_pedidos.selection()
+            if not sel:
+                messagebox.showwarning("Aviso", "Selecione um pedido.")
+                return
+            pedido_id = tree_pedidos.item(sel[0])["values"][0]
+            d = db.obter_detalhes_pedido(pedido_id)
+            if not d:
+                return
+            texto = (
+                f"Pedido #{d[0]}\n\nCliente: {d[1]}\nTelefone: {d[2]}\nCPF: {d[3]}\n"
+                f"Endereço: {d[4]}\nRegião: {d[5]}\nObservações: {d[6]}\n\n"
+                f"Itens: {d[7]}\nSubtotal: R$ {d[8]:.2f}\nDesconto: R$ {d[9]:.2f}\n"
+                f"Entrega: R$ {d[10]:.2f}\nTotal: R$ {d[11]:.2f}\nData: {d[12]}\n"
+                f"Previsão: {d[13]}\nRastreio: {d[14]}\nPagamento: {d[15]}\n"
+                f"Banco: {d[16]}\nBrinde: {d[17]}\nStatus: {d[18]}"
+            )
+            messagebox.showinfo("Detalhes do Pedido", texto)
+
+        ctk.CTkButton(box_status, text="Atualizar Status", command=atualizar_status).pack(side="left", padx=5)
+        ctk.CTkButton(box_status, text="🔎 Ver Detalhes", command=detalhes_pedido, fg_color="#2979FF", hover_color="#1565C0").pack(side="left", padx=5)
+        ctk.CTkButton(box_status, text="🔄 Atualizar Lista", command=recarregar_pedidos).pack(side="right", padx=5)
+
+        # ---------------- AVALIAÇÕES ----------------
+        aba_av = abas.tab("⭐ Avaliações")
+        tree_av = ttk.Treeview(aba_av, columns=("cliente", "nota", "comentario", "data"), show="headings")
+        for c,t,w in [("cliente","Cliente",150),("nota","Nota",70),("comentario","Comentário",500),("data","Data",130)]:
+            tree_av.heading(c, text=t)
+            tree_av.column(c, width=w)
+        tree_av.pack(fill="both", expand=True, padx=8, pady=8)
+        for av in db.listar_avaliacoes():
+            tree_av.insert("", "end", values=av)
+
+        # ---------------- RESUMO ----------------
+        aba_resumo = abas.tab("📊 Resumo")
+        resumo = ctk.CTkFrame(aba_resumo, corner_radius=15)
+        resumo.pack(fill="both", expand=True, padx=30, pady=30)
+        pedidos, faturamento, itens, media = db.estatisticas_pedidos()
+        for texto in [
+            f"🧾 Pedidos realizados: {pedidos}",
+            f"💰 Faturamento total: R$ {faturamento:.2f}",
+            f"👕 Camisas vendidas: {itens}",
+            f"⭐ Média das avaliações: {media:.1f}/5",
+        ]:
+            ctk.CTkLabel(resumo, text=texto, font=ctk.CTkFont(size=20, weight="bold")).pack(pady=15)
+
+        baixos = db.produtos_estoque_baixo(5)
+        ctk.CTkLabel(resumo, text="⚠️ ESTOQUE BAIXO (até 5 unidades)", font=ctk.CTkFont(size=18, weight="bold"), text_color="#FFD700").pack(pady=(25,8))
+        if baixos:
+            for nome, tam, qtd in baixos[:20]:
+                ctk.CTkLabel(resumo, text=f"{nome} — {tam}: {qtd} unidade(s)", font=ctk.CTkFont(size=14)).pack(pady=2)
+            if len(baixos) > 20:
+                ctk.CTkLabel(resumo, text=f"... e mais {len(baixos)-20} item(ns)", text_color="#AAAAAA").pack(pady=4)
+        else:
+            ctk.CTkLabel(resumo, text="✅ Nenhum tamanho está com estoque baixo.", text_color="#00E676", font=ctk.CTkFont(size=14, weight="bold")).pack(pady=5)
+
+        ctk.CTkButton(
+            self.win_admin, text="Fechar Painel", height=40,
+            fg_color="#E91E63", hover_color="#AD1457",
+            font=ctk.CTkFont(weight="bold"), command=self.win_admin.destroy,
+        ).pack(fill="x", padx=12, pady=(0,12))
 
 
 # =====================================================
